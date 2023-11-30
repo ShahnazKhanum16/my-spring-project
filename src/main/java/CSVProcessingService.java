@@ -46,7 +46,6 @@ public class CSVProcessingService {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        System.out.println(rows);
         return rows;
     }
 
