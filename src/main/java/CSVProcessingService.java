@@ -11,6 +11,7 @@ public class CSVProcessingService {
     private static final String DB_URL = "jdbc:h2:~/test";
     private static final String DB_USER = "SA";
     private static final String DB_PASSWORD = "";
+    private List<String[]> allData = new ArrayList<>();
 
     public void processCSVFiles(List<String> filePaths) {
         ExecutorService executor = Executors.newCachedThreadPool();
@@ -20,12 +21,18 @@ public class CSVProcessingService {
         }
 
         executor.shutdown();
+        while (!executor.isTerminated()) {
+            // Wait for all threads to complete
+        }
+
+        verifyInsertedData(); // Verify inserted data after all CSV files processing
     }
 
     private void processCSVFile(String filePath) {
         List<String[]> data = loadDataFromFile(filePath);
-        persistDataToDatabase(data);
-        verifyInsertedData(); // Verify inserted data after each CSV file processing
+        synchronized (allData) {
+            allData.addAll(data);
+        }
     }
 
     private List<String[]> loadDataFromFile(String filePath) {
@@ -45,32 +52,23 @@ public class CSVProcessingService {
 
     private void persistDataToDatabase(List<String[]> data) {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String sql = "INSERT INTO people (id, name) VALUES (?, ?) ON CONFLICT DO NOTHING"; // For PostgreSQL syntax
-            // For H2, use: String sql = "MERGE INTO people (id, name) KEY(id) VALUES (?, ?)"; 
+            String sql = "INSERT INTO people (id, name) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM people WHERE id = ?)";
 
             PreparedStatement statement = connection.prepareStatement(sql);
 
             for (String[] row : data) {
-                if (row.length >= 2) { // Assuming each row has at least 2 columns (id and name)
+                if (row.length >= 2) {
                     long id = Long.parseLong(row[0]);
                     String name = row[1];
 
-                    // Check if record already exists based on ID (Assuming ID is unique)
                     if (!isRecordExists(connection, id)) {
-                        statement.setLong(1, id); // Assuming ID is in the first column
-                        statement.setString(2, name); // Assuming name is in the second column
-                        statement.addBatch();
+                        statement.setLong(1, id);
+                        statement.setString(2, name);
+                        statement.setLong(3, id);
+
+                        statement.executeUpdate();
                     }
                 }
-            }
-
-            int[] result = statement.executeBatch();
-
-            // Check if the batch execution was successful
-            if (result.length > 0) {
-                System.out.println("Data insertion successful for file.");
-            } else {
-                System.out.println("No new records inserted for file.");
             }
         } catch (SQLException | NumberFormatException e) {
             e.printStackTrace();
@@ -78,7 +76,6 @@ public class CSVProcessingService {
         }
     }
 
-    // Method to check if a record exists based on ID
     private boolean isRecordExists(Connection connection, long id) throws SQLException {
         String sql = "SELECT id FROM people WHERE id = ?";
         PreparedStatement statement = connection.prepareStatement(sql);
@@ -89,6 +86,8 @@ public class CSVProcessingService {
 
     private void verifyInsertedData() {
         try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
+            persistDataToDatabase(allData); // Insert all collected data
+
             String sql = "SELECT * FROM people";
             PreparedStatement statement = connection.prepareStatement(sql);
             ResultSet resultSet = statement.executeQuery();
@@ -110,8 +109,9 @@ public class CSVProcessingService {
     public static void main(String[] args) {
         CSVProcessingService csvService = new CSVProcessingService();
         List<String> csvFiles = new ArrayList<>();
-        //csvFiles.add("./src/main/students.csv");
-        csvFiles.add("./src/main/staff.csv"); // Add your CSV file paths here
+        csvFiles.add("./src/main/students.csv");
+        csvFiles.add("./src/main/staff.csv");
+        csvFiles.add("./src/main/mentors.csv");// Add your CSV file paths here
 
         csvService.processCSVFiles(csvFiles);
     }
